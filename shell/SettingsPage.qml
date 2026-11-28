@@ -1,4 +1,5 @@
 import QtQuick
+import TvShell.Apps
 import TvShell.Common
 import TvShell.Controllers
 import TvShell.Photos
@@ -16,6 +17,7 @@ FocusScope {
     required property ScreensaverSettings screensaver
     required property ViewerSettings viewer
     required property YouTubeSettings youtube
+    required property AppSettings apps
     required property ImmichClient immich
     required property ControllerClient controllers
 
@@ -24,6 +26,10 @@ FocusScope {
     // Seconds; 0 = never.
     readonly property var idleDurations: [0, 60, 120, 300, 600, 900, 1800, 2700, 3600, 7200, 14400]
     readonly property var photoDurations: [5, 10, 15, 30, 60, 120]
+    // How long an app stays loaded once left; 0 = until it is closed.
+    readonly property var closeDurations: [0, 600, 1800, 3600]
+    // How long a web app stays open once left; 0 = always.
+    readonly property var suspendDurations: [0, 300, 600, 1800, 3600]
     readonly property var transitionKinds: ["slide", "fade", "none"]
     readonly property var backgroundKinds: ["blur", "gradient", "black"]
 
@@ -71,6 +77,22 @@ FocusScope {
                  value: () => youtube.skipCategories.includes(category) ? qsTr("On") : qsTr("Off"),
                  change: d => youtube.toggleSkip(category),
                  activate: () => youtube.toggleSkip(category) }
+    }
+
+    // Whether one kind of YouTube video keeps playing when YouTube is left.
+    function backgroundOption(label, kind) {
+        return { label: label,
+                 value: () => youtube.backgroundKinds.includes(kind) ? qsTr("Keeps playing") : qsTr("Pauses"),
+                 change: d => youtube.toggleBackground(kind),
+                 activate: () => youtube.toggleBackground(kind) }
+    }
+
+    // How long one app stays loaded once left.
+    function closeOption(label, app) {
+        return { label: label,
+                 value: () => apps.closeAfter[app] === 0 ? qsTr("Stays loaded")
+                                                          : qsTr("Closes after %1").arg(formatDuration(apps.closeAfter[app])),
+                 change: d => apps.setCloseAfter(app, stepIn(closeDurations, apps.closeAfter[app], d)) }
     }
 
     function albumsText() {
@@ -127,8 +149,21 @@ FocusScope {
               value: () => backgroundName(viewer.background),
               change: d => viewer.background = cycle(backgroundKinds, viewer.background, d) },
         ],
-        // YouTube: what SponsorBlock skips
+        // Apps: what happens to an app that is left with nothing playing
         [
+            { label: qsTr("Web app suspend time"),
+              value: () => apps.webAppSuspendAfter === 0 ? qsTr("Never")
+                                                         : qsTr("After %1").arg(formatDuration(apps.webAppSuspendAfter)),
+              change: d => apps.webAppSuspendAfter = stepIn(suspendDurations, apps.webAppSuspendAfter, d) },
+            closeOption(qsTr("YouTube, left with nothing playing"), "youtube"),
+            closeOption(qsTr("Jellyfin, left with nothing playing"), "jellyfin"),
+        ],
+        // YouTube: what keeps playing when it is left, what SponsorBlock skips
+        [
+            backgroundOption(qsTr("Songs (cover only), when you leave YouTube"), "song"),
+            backgroundOption(qsTr("Music videos, when you leave YouTube"), "music-video"),
+            backgroundOption(qsTr("Podcasts, when you leave YouTube"), "podcast"),
+            backgroundOption(qsTr("Other videos, when you leave YouTube"), "video"),
             skipOption(qsTr("Skip sponsors"), "sponsor"),
             skipOption(qsTr("Skip self-promotion"), "selfpromo"),
             skipOption(qsTr("Skip like and subscribe reminders"), "interaction"),
@@ -168,7 +203,7 @@ FocusScope {
         width: 400
         spacing: 8
         focus: true
-        model: [qsTr("Power"), qsTr("Controllers"), qsTr("Screensaver"), qsTr("Photos"), qsTr("YouTube")]
+        model: [qsTr("Power"), qsTr("Controllers"), qsTr("Screensaver"), qsTr("Photos"), qsTr("Apps"), qsTr("YouTube")]
 
         delegate: SettingRow {
             required property string modelData

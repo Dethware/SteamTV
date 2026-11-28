@@ -7,8 +7,6 @@ qt_add_qml_module(tvshell_session
     SOURCES
         BaseLayer.cpp
         BaseLayer.h
-        GamepadInput.cpp
-        GamepadInput.h
         ShellService.cpp
         ShellService.h
         SteamLog.cpp
@@ -26,6 +24,5 @@ target_link_libraries(tvshell_session
         Qt6::DBus
         Qt6::Gui
         Qt6::Qml
-        SDL3::SDL3
         PkgConfig::XCB
 )

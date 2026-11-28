@@ -1,0 +1,16 @@
+[Unit]
+Description=Web app %i
+# Started and stopped by the TV shell, never on its own. Part of Steam's Gaming Mode session:
+# it stops with it.
+PartOf=graphical-session.target
+
+[Service]
+Type=exec
+# gamescope's DISPLAY etc., written by /usr/lib/steamos/gamescope-session.
+EnvironmentFile=%t/gamescope-environment
+# Steam's virtual gamepad, not the raw controller (as the shell does).
+Environment=SDL_JOYSTICK_HIDAPI=0
+Environment=SDL_GAMECONTROLLER_ALLOW_STEAM_VIRTUAL_GAMEPAD=1
+# %i: the site's folder name, e.g. youtube.
+ExecStart=%h/apps/webapp/webapp %h/apps/webapp/sites/%i
+Slice=session.slice

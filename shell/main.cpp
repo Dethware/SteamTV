@@ -6,7 +6,6 @@
 #include <QtQml/QQmlExtensionPlugin>
 #include <QScreen>
 #include <QSocketNotifier>
-#include <QtWebEngineQuick/qtwebenginequickglobal.h>
 
 #include <csignal>
 #include <sys/eventfd.h>
@@ -25,6 +24,8 @@ Q_IMPORT_QML_PLUGIN(TvShell_AppsPlugin)
 Q_IMPORT_QML_PLUGIN(TvShell_YouTubePlugin)
 Q_IMPORT_QML_PLUGIN(TvShell_ControllersPlugin)
 Q_IMPORT_QML_PLUGIN(TvShell_AssistantPlugin)
+// Shared with the programs the shell shows (../shared).
+Q_IMPORT_QML_PLUGIN(TvShared_InputPlugin)
 
 namespace {
 
@@ -96,9 +97,6 @@ int main(int argc, char *argv[])
 
     const int startHeight = outputHeight();
     scaleToOutput(startHeight);
-
-    // YouTube (qml/YouTubePage.qml). Must come before the application object.
-    QtWebEngineQuick::initialize();
 
     QGuiApplication app(argc, argv);
     app.setApplicationName(QStringLiteral("tvshell"));

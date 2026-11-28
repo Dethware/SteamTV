@@ -3339,6 +3339,137 @@ stayed 3.9.5 and the machine didn't reboot. Afterwards the shell, the controller
 the keep-alive, the wake log and the watchdog all running, and cecd's settings as the user
 set them (`uinput = false`, `allow_standby = false`).
 
+## YouTube moves out of the shell (2026-11-28)
+
+The shell restarts with every deploy and YouTube restarted with it. Decided:
+
+- A generic web app program (`apps/webapp`), with YouTube as its first site: a folder with a
+  description (address, user agent, scripts) and page scripts. Chosen over a module per site
+  built into the program, since a site is then added without building anything, a step
+  towards apps described outside the shell. YouTube's own parts are already JavaScript run
+  in the page; SponsorBlock's request moves into the page script too.
+- The program and a site's scripts talk through functions the program calls in the page
+  (`webapp.player()`, `webapp.back()`), as the shell does today with `runJavaScript`. Not
+  QWebChannel: the player has to be read in the page's own world, where the page would see a
+  channel and could call the program through it.
+- When left with nothing playing it stays loaded and frozen, as today, with a per-app "When
+  left" setting in the shell to close it after a while.
+- What plays goes to the shell over MPRIS, with our own metadata keys for music and cover
+  only; the shell's `ManagedApp` reads it for every app.
+- The settings stay in the shell's Settings; the shell writes them to a file per app that the
+  program watches (works without the shell running).
+- Code both programs use (the controller as keys) goes in a shared folder, `shared/`.
+
+Scaffold in place; not checked yet: whether Qt WebEngine registers an MPRIS player for a page
+by itself.
+
+### Qt WebEngine's own MPRIS player (2026-11-28)
+
+It does: the shell's process owns `org.mpris.MediaPlayer2.chromium.instance3904` (3904 its
+PID), `Identity` "tvshell" (the application name), no introspection data.
+
+- Nothing playing: `Stopped`, empty metadata, `CanPlay` and `CanPause` false.
+- A music track playing in YouTube: `Playing`, `xesam:title` and `xesam:artist` as YouTube
+  shows them, `mpris:artUrl` (a file in `/tmp`), `mpris:length`, `Position`, `CanSeek`,
+  `CanGoNext`, `CanGoPrevious` true.
+- `Pause` paused the video (status `Paused`, and the shell's own reading of the page saw it
+  stop), `Play` played it again.
+- No music mark, which MPRIS has no key for.
+
+So the web app's own MPRIS player is dropped: only whether it is music (and cover only) goes
+to the shell on a small interface of the web app's own (`apps/webapp/DEVELOPMENT.md`,
+Playing). The shell finds a web app's player by the prefix and by its owner's process being
+in the app's unit.
+
+### Building it (2026-11-28)
+
+- YouTube's TV page sends `connect-src` in its Content-Security-Policy, a long list of
+  Google's and ad servers without sponsor.ajay.app. A script in the program's own world is
+  held to the page's rules too, so SponsorBlock can't be asked from the page. Its server
+  sends `Access-Control-Allow-Origin: *`, but that doesn't help against the page's own
+  rules. So the program fetches for the page, only for prefixes in `site.json`, over a Qt
+  WebChannel placed in the program's world (`webChannelWorld`), where the page can't see
+  it. QWebChannel was rejected earlier for the hooks that read YouTube's player; those stay
+  with `runJavaScript` in the page's world.
+- Qt WebChannel is on SteamOS (`qt6-webchannel` 6.11.1-1) and in the toolchain image.
+- In QML a C++ property marked `SCRIPTABLE false` isn't there at all: the plan of two
+  property names on one object (lowercase for QML, capitalised for D-Bus with
+  `ExportScriptableProperties`) failed with "Property 'music' does not exist". The D-Bus
+  names went to a `QDBusAbstractAdaptor` instead.
+- In the toolchain image a program started without a display printed nothing: Qt logs to
+  the journal when stderr isn't a terminal. `QT_FORCE_STDERR_LOGGING=1` shows it.
+- The first deploy came during screen off. The new shell started thinking the screen was
+  on, so it sent nothing, and gamescope kept the screen asleep and the TV stayed in
+  standby; Home changed nothing either. Woken by hand (`gamescopectl
+  drm_sleep_external_screen 0`, cecd `Wake`). The shell now says screen on and wakes the TV
+  once when it starts.
+- Leaving YouTube didn't pause "Microsoft has admitted defeat", and the top bar showed it:
+  the web app counted it as music. Its mark is `MUSIC_VIDEO_TYPE_PODCAST_EPISODE`: YouTube
+  files podcasts under the same field as songs, and any mark counted as music (also in the
+  old page inside the shell). The user: podcasts may well keep playing, but it should be a
+  choice. Now the web app tells `song` (`_ATV`, `_PRIVATELY_OWNED_TRACK`), `music-video`
+  (`_OMV`, `_UGC`, `_OFFICIAL_SOURCE_MUSIC`), `podcast` and `video` apart, and Settings,
+  YouTube, chooses which keep playing when YouTube is left: songs, music videos and
+  podcasts at first, ordinary videos pause. The list of marks is from a third-party library
+  (ytmusicapi_dart's `VideoType`), not from YouTube.
+- Opening YouTube played a video by itself, after it had been paused from the top bar:
+  opening an app always sent MPRIS `Play`. Now only a pause from leaving is continued on
+  opening (a parked game in Eden always is).
+- Opening Jellyfin paused YouTube's music at once, and opening YouTube again then
+  continued it. The user: only pause when the other app plays something itself. Now an app
+  that starts playing pauses the others, and that pause isn't continued on opening. A
+  photo's video no longer pauses anything (the user: it shouldn't interrupt background
+  music; maybe the music gets quieter, later).
+- A paused ordinary video had nothing in the top bar. The user: show it there; OK opens
+  YouTube to continue it. It then showed the title for about a second and turned to
+  "YouTube": once the web app hides and freezes the page, Chromium's player says
+  `Stopped` with empty metadata. So the shell keeps the title of a video that leaving
+  paused, and on opening sends Play only once the player is back to `Paused` (at most 5 s
+  later), since a Play that reaches a frozen page may be lost.
+- That didn't continue the video either: after the page woke, Chromium's player went from
+  `Stopped` straight to `Playing` (the user's own press), never `Paused`, so no Play went
+  out; the user saw YouTube's interface loading after the wake. In the shell before, the
+  page was frozen too, but it seemed loaded already. Now the shell asks the web app
+  (`Resume` on `local.webapp.youtube`), which plays the main video in the page once the
+  page runs, and a page that was just left stays unfrozen for a minute. Not known yet
+  whether the loading after a wake is the freezing itself.
+- Coming back within the minute worked. After more than a minute YouTube showed "Who's
+  watching?" and the video's place was gone: YouTube treats a page woken from a freeze
+  like a TV app brought back, it seems. Before, inside the shell, the page was frozen as
+  well, so the difference isn't understood. Now the web app never freezes: a page left
+  with nothing playing is only hidden, which Chromium throttles anyway. Not known yet
+  whether YouTube also shows the picker after being hidden for long.
+- Hidden for a few minutes, then shown: YouTube loaded the video again and continued from
+  the last point it had seeked to, not from where it was paused. The user: keep it open
+  for a while; the screensaver, screen-off and sleep times are there anyway, and an app
+  suspend time fits beside them. Now Settings, Apps, has a web app suspend time, one for
+  every web app since more are to come (half an hour at first): only then is the page
+  hidden.
+- "Boneklezmer - Extended" (an extended track uploaded as an ordinary video) paused when
+  YouTube was left: it has no music mark. Its player response has no category either: on
+  the TV page it holds only `responseContext`, `playabilityStatus`, `streamingData`,
+  `heartbeatParams`, `playbackTracking`, `captions`, `videoDetails`, `playerConfig`,
+  `storyboards`, `trackingParams`, `adBreakHeartbeatParams` (no `microformat`), and
+  `videoDetails` only ID, length, channel, thumbnail and flags. But YouTube shows a music
+  note on its tile and offers "Switch to audio" in the player, for this video and not for
+  others. Looked at with DevTools (a temporary drop-in with `QTWEBENGINE_REMOTE_DEBUGGING`,
+  removed again): the player's actions (`ytlr-player-actions-container`,
+  `__instance.props.data.settingActions`) include
+  `TRANSPORT_CONTROLS_BUTTON_TYPE_MUSIC_DISPLAY` (icon `AUDIO`, a popup "Choose what you
+  want to appear on the screen while you're playing music", signals `AUDIO_MODE` and
+  `VIDEO_MODE`). Recorded every 2 s: there for this video with the controls shown and
+  hidden, never for an ordinary video (a Wind Waker video). Now a video without a mark but
+  with that action counts as a music video.
+- Tried: it paused the first time, kept playing every time after (also after a restart of
+  YouTube). The log: a video counts as `video (no mark)` for about two seconds after it
+  opens, until the player's actions are there and it turns `music-video (no mark, music
+  display)`. The first time it was left two seconds in, still inside that window. The user:
+  note it, don't pursue it now.
+- Stopping the web app (`systemctl --user restart`) once ended in "double free or
+  corruption" and a core dump on the way out. Not looked into yet.
+- How long an app stays loaded when left became a setting (Settings, Apps): YouTube stays,
+  as it did inside the shell; Jellyfin closes after ten minutes, as before.
+
 ## Waydroid prerequisites
 
 - Kernel has the Rust binder driver built in (`CONFIG_ANDROID_BINDER_IPC_RUST=y`,

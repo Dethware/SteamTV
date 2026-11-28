@@ -2,6 +2,7 @@
 
 #include <csignal>
 #include <QDBusConnection>
+#include <QDBusArgument>
 #include <QDBusConnectionInterface>
 #include <QDBusMessage>
 #include <QDBusPendingCallWatcher>
@@ -18,6 +19,8 @@ Q_LOGGING_CATEGORY(lcManagedApp, "tvshell.app")
 namespace {
 
 constexpr int WindowPollMs = 500;
+// How long resume() waits for a player that isn't back to "Paused" yet.
+constexpr int ResumePendingMs = 5000;
 
 const QString Systemd = QStringLiteral("org.freedesktop.systemd1");
 const QString SystemdPath = QStringLiteral("/org/freedesktop/systemd1");
@@ -26,6 +29,9 @@ const QString SystemdUnit = QStringLiteral("org.freedesktop.systemd1.Unit");
 const QString Properties = QStringLiteral("org.freedesktop.DBus.Properties");
 const QString MprisPath = QStringLiteral("/org/mpris/MediaPlayer2");
 const QString MprisPlayer = QStringLiteral("org.mpris.MediaPlayer2.Player");
+// A web app's media kind (apps/webapp/MediaKind.h).
+const QString MediaKindPath = QStringLiteral("/local/webapp");
+const QString MediaKindInterface = QStringLiteral("local.webapp");
 
 template<typename T>
 using XcbReply = std::unique_ptr<T, decltype(&std::free)>;
@@ -48,6 +54,28 @@ QDBusMessage getProperty(const QString &service, const QString &path, const QStr
     return call;
 }
 
+QDBusMessage getAll(const QString &service, const QString &path, const QString &interface)
+{
+    auto call = QDBusMessage::createMethodCall(service, path, Properties, QStringLiteral("GetAll"));
+    call << interface;
+    return call;
+}
+
+// A dictionary inside a variant arrives as a QDBusArgument still to be read.
+QVariantMap toMap(const QVariant &value)
+{
+    if (value.canConvert<QDBusArgument>())
+        return qdbus_cast<QVariantMap>(value.value<QDBusArgument>());
+    return value.toMap();
+}
+
+QStringList toStrings(const QVariant &value)
+{
+    if (value.canConvert<QDBusArgument>())
+        return qdbus_cast<QStringList>(value.value<QDBusArgument>());
+    return value.toStringList();
+}
+
 } // namespace
 
 ManagedApp::ManagedApp(QObject *parent)
@@ -59,6 +87,8 @@ ManagedApp::ManagedApp(QObject *parent)
         m_connection = x11->connection();
         m_root = xcb_setup_roots_iterator(xcb_get_setup(m_connection)).data->root;
     }
+    m_resumePending.setSingleShot(true);
+    m_resumePending.setInterval(ResumePendingMs);
     m_windowPoll.setInterval(WindowPollMs);
     connect(&m_windowPoll, &QTimer::timeout, this, &ManagedApp::checkWindow);
 
@@ -99,6 +129,15 @@ void ManagedApp::setMprisName(const QString &name)
     m_mprisName = name;
     emit mprisNameChanged();
     findPlayer();
+}
+
+void ManagedApp::setMediaKindName(const QString &name)
+{
+    if (m_mediaKindName == name)
+        return;
+    m_mediaKindName = name;
+    emit mediaKindNameChanged();
+    watchMediaKind();
 }
 
 void ManagedApp::start()
@@ -145,8 +184,26 @@ void ManagedApp::pause()
     if (m_player.isEmpty() || !m_playing)
         return;
     qCInfo(lcManagedApp) << "pausing" << m_unit;
+    setPausedByUs(false);
+    m_resumePending.stop();
     QDBusConnection::sessionBus().asyncCall(
         QDBusMessage::createMethodCall(m_player, MprisPath, MprisPlayer, QStringLiteral("Pause")));
+}
+
+void ManagedApp::pauseWhileAway()
+{
+    if (m_player.isEmpty() || !m_playing)
+        return;
+    pause();
+    setPausedByUs(true);
+}
+
+void ManagedApp::setPausedByUs(bool paused)
+{
+    if (m_pausedByUs == paused)
+        return;
+    m_pausedByUs = paused;
+    emit pausedWhileAwayChanged();
 }
 
 void ManagedApp::setAllWindows(bool all)
@@ -160,11 +217,39 @@ void ManagedApp::setAllWindows(bool all)
 // The other half of pause(): a program that was paused when it was left carries on.
 void ManagedApp::resume()
 {
-    if (m_player.isEmpty() || m_playing)
+    if (m_player.isEmpty() || m_playing || !(m_pausedByUs || m_alwaysResume))
         return;
+    setPausedByUs(false);
+    // A web app's page may be frozen while away: MPRIS Play doesn't reach it, and Chromium's
+    // player says "Stopped" until something plays. The web app continues it itself once
+    // the page runs again.
+    if (!m_mediaKindName.isEmpty()) {
+        qCInfo(lcManagedApp) << "continuing" << m_unit << "through the web app";
+        QDBusConnection::sessionBus().asyncCall(
+            QDBusMessage::createMethodCall(m_mediaKindName, MediaKindPath, MediaKindInterface, QStringLiteral("Resume")));
+        return;
+    }
+    if (m_status == u"Paused") {
+        play();
+        return;
+    }
+    qCInfo(lcManagedApp) << m_unit << "is" << m_status << "- continuing once it is paused";
+    m_resumePending.start();
+}
+
+void ManagedApp::play()
+{
     qCInfo(lcManagedApp) << "continuing" << m_unit;
     QDBusConnection::sessionBus().asyncCall(
         QDBusMessage::createMethodCall(m_player, MprisPath, MprisPlayer, QStringLiteral("Play")));
+}
+
+void ManagedApp::togglePlay()
+{
+    if (m_player.isEmpty())
+        return;
+    QDBusConnection::sessionBus().asyncCall(
+        QDBusMessage::createMethodCall(m_player, MprisPath, MprisPlayer, QStringLiteral("PlayPause")));
 }
 
 void ManagedApp::watchUnit()
@@ -222,11 +307,13 @@ void ManagedApp::setRunning(bool running)
         m_windowPoll.start();
         checkWindow();
         findPlayer();
+        watchMediaKind();
     } else {
         m_windowPoll.stop();
         m_tagged.clear();
         setWindow(0);
         setPlayer(QString());
+        setMediaKind(false, false);
     }
     emit runningChanged();
     if (!running && !m_stopping)
@@ -341,22 +428,54 @@ void ManagedApp::findPlayer()
         return;
     const QStringList names = bus->registeredServiceNames();
     for (const QString &name : names) {
-        if (name.startsWith(m_mprisName)) {
-            setPlayer(name);
-            return;
-        }
+        if (name.startsWith(m_mprisName))
+            checkPlayer(name);
     }
+}
+
+// The name is ours if its owner's process runs in our unit (systemd's GetUnitByPID).
+void ManagedApp::checkPlayer(const QString &busName)
+{
+    if (m_unitPath.path().isEmpty())
+        return;
+    auto pidCall = QDBusMessage::createMethodCall(QStringLiteral("org.freedesktop.DBus"), QStringLiteral("/org/freedesktop/DBus"),
+                                                  QStringLiteral("org.freedesktop.DBus"),
+                                                  QStringLiteral("GetConnectionUnixProcessID"));
+    pidCall << busName;
+    auto *pidWatcher = new QDBusPendingCallWatcher(QDBusConnection::sessionBus().asyncCall(pidCall), this);
+    connect(pidWatcher, &QDBusPendingCallWatcher::finished, this, [this, busName](QDBusPendingCallWatcher *pidDone) {
+        pidDone->deleteLater();
+        const QDBusPendingReply<quint32> pid = *pidDone;
+        if (pid.isError())
+            return;
+        auto unitCall = systemdCall(QStringLiteral("GetUnitByPID"));
+        unitCall << pid.value();
+        auto *unitWatcher = new QDBusPendingCallWatcher(QDBusConnection::sessionBus().asyncCall(unitCall), this);
+        connect(unitWatcher, &QDBusPendingCallWatcher::finished, this, [this, busName](QDBusPendingCallWatcher *unitDone) {
+            unitDone->deleteLater();
+            const QDBusPendingReply<QDBusObjectPath> unit = *unitDone;
+            if (!unit.isError() && unit.value() == m_unitPath && m_running)
+                setPlayer(busName);
+        });
+    });
 }
 
 void ManagedApp::nameOwnerChanged(const QString &name, const QString &, const QString &newOwner)
 {
+    if (!m_mediaKindName.isEmpty() && name == m_mediaKindName) {
+        if (newOwner.isEmpty())
+            setMediaKind(false, false);
+        else
+            watchMediaKind();
+        return;
+    }
     if (m_mprisName.isEmpty() || !name.startsWith(m_mprisName))
         return;
     if (newOwner.isEmpty()) {
         if (name == m_player)
             setPlayer(QString());
-    } else {
-        setPlayer(name);
+    } else if (m_running) {
+        checkPlayer(name);
     }
 }
 
@@ -371,18 +490,24 @@ void ManagedApp::setPlayer(const QString &busName)
     }
     m_player = busName;
     if (m_player.isEmpty()) {
+        m_status.clear();
+        m_resumePending.stop();
         setPlaying(false);
+        setPausedByUs(false);
+        setMetadata(QVariant());
         return;
     }
+    qCInfo(lcManagedApp) << m_unit << "plays through" << m_player;
     bus.connect(m_player, MprisPath, Properties, QStringLiteral("PropertiesChanged"), this,
                 SLOT(playerPropertiesChanged(QString, QVariantMap, QStringList)));
-    auto *watcher = new QDBusPendingCallWatcher(
-        bus.asyncCall(getProperty(m_player, MprisPath, MprisPlayer, QStringLiteral("PlaybackStatus"))), this);
+    auto *watcher = new QDBusPendingCallWatcher(bus.asyncCall(getAll(m_player, MprisPath, MprisPlayer)), this);
     connect(watcher, &QDBusPendingCallWatcher::finished, this, [this](QDBusPendingCallWatcher *finished) {
         finished->deleteLater();
-        const QDBusPendingReply<QDBusVariant> status = *finished;
-        if (!status.isError())
-            setPlaying(status.value().variant().toString() == u"Playing");
+        const QDBusPendingReply<QVariantMap> properties = *finished;
+        if (properties.isError())
+            return;
+        setStatus(properties.value().value(QStringLiteral("PlaybackStatus")).toString());
+        setMetadata(properties.value().value(QStringLiteral("Metadata")));
     });
 }
 
@@ -392,7 +517,78 @@ void ManagedApp::playerPropertiesChanged(const QString &interface, const QVarian
         return;
     const auto status = changed.constFind(QStringLiteral("PlaybackStatus"));
     if (status != changed.constEnd())
-        setPlaying(status->toString() == u"Playing");
+        setStatus(status->toString());
+    const auto metadata = changed.constFind(QStringLiteral("Metadata"));
+    if (metadata != changed.constEnd())
+        setMetadata(*metadata);
+}
+
+void ManagedApp::setStatus(const QString &status)
+{
+    m_status = status;
+    setPlaying(status == u"Playing");
+    if (status == u"Paused" && m_resumePending.isActive()) {
+        m_resumePending.stop();
+        play();
+    }
+}
+
+void ManagedApp::setMetadata(const QVariant &metadata)
+{
+    const QVariantMap map = toMap(metadata);
+    const QString title = map.value(QStringLiteral("xesam:title")).toString();
+    // A web app's page frozen while away forgets what it was playing; the top bar still
+    // shows the video that leaving paused.
+    if (title.isEmpty() && m_pausedByUs)
+        return;
+    QStringList artists = toStrings(map.value(QStringLiteral("xesam:artist")));
+    artists.removeAll(QString());
+    const QString artist = artists.join(QStringLiteral(", "));
+    if (title == m_title && artist == m_artist)
+        return;
+    m_title = title;
+    m_artist = artist;
+    emit metadataChanged();
+}
+
+void ManagedApp::watchMediaKind()
+{
+    if (m_mediaKindName.isEmpty() || !m_running)
+        return;
+    auto bus = QDBusConnection::sessionBus();
+    // Connecting twice to the same signal is refused by Qt, so this may run again.
+    bus.connect(m_mediaKindName, MediaKindPath, Properties, QStringLiteral("PropertiesChanged"), this,
+                SLOT(mediaKindPropertiesChanged(QString, QVariantMap, QStringList)));
+    auto *watcher = new QDBusPendingCallWatcher(bus.asyncCall(getAll(m_mediaKindName, MediaKindPath, MediaKindInterface)), this);
+    connect(watcher, &QDBusPendingCallWatcher::finished, this, [this](QDBusPendingCallWatcher *finished) {
+        finished->deleteLater();
+        const QDBusPendingReply<QVariantMap> properties = *finished;
+        if (!properties.isError())
+            readMediaKind(properties.value());
+    });
+}
+
+void ManagedApp::mediaKindPropertiesChanged(const QString &interface, const QVariantMap &changed, const QStringList &)
+{
+    if (interface == MediaKindInterface)
+        readMediaKind(changed);
+}
+
+void ManagedApp::readMediaKind(const QVariantMap &properties)
+{
+    setMediaKind(properties.value(QStringLiteral("Background"), m_background).toBool(),
+                 properties.value(QStringLiteral("CoverOnly"), m_coverOnly).toBool());
+}
+
+void ManagedApp::setMediaKind(bool background, bool coverOnly)
+{
+    if (m_background == background && m_coverOnly == coverOnly)
+        return;
+    m_background = background;
+    m_coverOnly = coverOnly;
+    qCInfo(lcManagedApp) << m_unit << (background ? "keeps playing when left" : "pauses when left")
+                         << (coverOnly ? "(cover only)" : "");
+    emit mediaKindChanged();
 }
 
 void ManagedApp::setPlaying(bool playing)
@@ -400,6 +596,8 @@ void ManagedApp::setPlaying(bool playing)
     if (m_playing == playing)
         return;
     m_playing = playing;
+    if (playing)
+        setPausedByUs(false);
     qCInfo(lcManagedApp) << m_unit << (playing ? "is playing" : "is not playing");
     emit playingChanged();
 }

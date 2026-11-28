@@ -10,6 +10,8 @@ qt_add_qml_module(tvshell_apps
         JellyfinLogo.qml
         YouTubeLogo.qml
     SOURCES
+        AppSettings.cpp
+        AppSettings.h
         ManagedApp.cpp
         ManagedApp.h
     DEPENDENCIES

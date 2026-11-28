@@ -17,8 +17,8 @@ log is a reference with the reasons why things were done, and such details help.
 
 The split between the kinds of document is in the global `~/.claude/CLAUDE.md`.
 
-- For users: `README.md` at the top, and one in each part (`shell/`, `controllers/`, `apps/eden/`, `apps/jellyfin-desktop/`, `toolchains/`, `system/steam-ui-watchdog/`, `system/wake-log/`).
-- For developers: `DEVELOPMENT.md` at the top for what spans the parts (how they fit, constraints, decisions, hardware, apps, plans, open questions, ideas), and one in `shell/`, `controllers/` and `apps/eden/` for how each works inside.
+- For users: `README.md` at the top, and one in each part (`shell/`, `controllers/`, `apps/eden/`, `apps/jellyfin-desktop/`, `apps/webapp/`, `toolchains/`, `system/steam-ui-watchdog/`, `system/wake-log/`).
+- For developers: `DEVELOPMENT.md` at the top for what spans the parts (how they fit, constraints, decisions, hardware, apps, plans, open questions, ideas), and one in `shell/`, `controllers/`, `apps/eden/`, `apps/webapp/` and `shared/` for how each works inside.
 - The log: `docs/gabecube-findings.md`. Dated findings, measurements, decisions and rejected alternatives go there; keep it updated as tests run. The first reconnaissance of the machine (how Gaming Mode starts, what persists, focus control, Waydroid's prerequisites) is at its start.
 
 ## Rules that follow from the decisions

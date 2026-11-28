@@ -27,6 +27,14 @@ TvPower::TvPower(QObject *parent)
                                          QStringLiteral("/org/freedesktop/login1"),
                                          QStringLiteral("org.freedesktop.login1.Manager"),
                                          QStringLiteral("PrepareForSleep"), this, SLOT(prepareForSleep(bool)));
+    // Once `on` has its first value: a shell (re)started while the TV was in standby (a
+    // deploy during screen off) would otherwise leave it there, since only changes are sent.
+    QTimer::singleShot(0, this, [this] {
+        if (!m_on)
+            return;
+        qCInfo(lcTv) << "started with the screen on: turning the TV on";
+        call(QStringLiteral("Wake"), {});
+    });
 }
 
 void TvPower::prepareForSleep(bool start)

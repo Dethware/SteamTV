@@ -14,17 +14,20 @@ gamescope. Everything of ours runs inside or next to that session.
 |---|---|---|---|
 | `shell/` | The TV's home screen: places with apps, games and photos, the screensaver, idle and power | An X11 window in the Gaming Mode session, a user service | [shell/DEVELOPMENT.md](shell/DEVELOPMENT.md) |
 | `controllers/` | The only program that talks to the Joy-Cons and the Pro Controller | A system service running as the user | [controllers/DEVELOPMENT.md](controllers/DEVELOPMENT.md) |
+| `apps/webapp/` | A website as a program of its own; YouTube is its first site | A user service per site the shell starts and shows | [apps/webapp/DEVELOPMENT.md](apps/webapp/DEVELOPMENT.md) |
 | `apps/jellyfin-desktop/` | Jellyfin's player, patched to behave on a TV | A user service the shell starts and shows | [apps/jellyfin-desktop/README.md](apps/jellyfin-desktop/README.md) |
 | `apps/eden/` | The Eden emulator with our controller source and patches | A user service the shell starts and shows | [apps/eden/DEVELOPMENT.md](apps/eden/DEVELOPMENT.md) |
 | `system/` | The remote's key map and pairing script, a watchdog for Steam's interface | Files in `/etc`, a user service | [system/steam-ui-watchdog/README.md](system/steam-ui-watchdog/README.md) |
+| `shared/` | Code the shell and the web app both build in (the controller as keys) | Linked into each | [shared/DEVELOPMENT.md](shared/DEVELOPMENT.md) |
 | `toolchains/` | Container images with SteamOS's own package versions, to build all of the above | On the development machine | [toolchains/README.md](toolchains/README.md) |
 
 How they meet:
 
 - **The screen.** The shell tags its window as a "game" for gamescope and puts itself first
   in gamescope's list of what to show; Steam keeps running behind it for games, downloads
-  and its own menus. A program the shell starts itself (Jellyfin, Eden) is tagged the same
-  way and shown in place of the shell; Home brings the shell back.
+  and its own menus. A program the shell starts itself (YouTube, Jellyfin, Eden) is tagged
+  the same way and shown in place of the shell; Home brings the shell back. What such a
+  program plays reaches the shell over MPRIS, which is also how the shell pauses it.
 - **Input.** The remote's keys and Steam's virtual gamepads reach the shell. The Joy-Cons
   and the Pro Controller reach nothing directly: the controller service owns them and makes
   virtual controllers for Steam and ordinary programs, and gives an emulator of the Switch
@@ -111,7 +114,7 @@ How they meet:
 
 | Need | How | State |
 |---|---|---|
-| YouTube | The TV interface smart TVs use (`youtube.com/tv`) in the shell's own browser view | In the shell |
+| YouTube | The TV interface smart TVs use (`youtube.com/tv`), as a site of the web app program | In the shell |
 | Jellyfin | Jellyfin Desktop in its TV layout, built from source with patches | In the shell |
 | Photos | Built into the shell with the Immich API: albums, memories, viewer, screensaver. It uses a dedicated TV account that sees the albums shared with it and owns no photos | In the shell |
 | Steam games | Steam's library, started through Steam | In the shell |
@@ -129,8 +132,9 @@ Larger pieces, roughly in order. Each part's own `DEVELOPMENT.md` has its smalle
 
 1. A pass over the controller service, the Eden source and the shell for refactoring and
    architecture. For the shell the direction is set: its source by topic and not by kind
-   of file, YouTube as a program of its own, and in time one description per program in
-   place of code that names each (`shell/DEVELOPMENT.md`, Next).
+   of file, and in time one description per program in place of code that names each
+   (`shell/DEVELOPMENT.md`, Next). The web app's sites, a folder each with its description
+   (`apps/webapp`), are one step towards those descriptions.
 2. The Joy-Con's IR camera in Eden.
 3. More Switch games than Ring Fit, each with its own tile and its own unit for Eden in
    place of `eden.service` naming Ring Fit. The shell reads a game's name and icon from the

@@ -8,6 +8,7 @@ import TvShell.Photos
 import TvShell.Power
 import TvShell.Session
 import TvShell.Steam
+import TvShared.Input
 import TvShell.YouTube
 
 Window {
@@ -18,7 +19,7 @@ Window {
     color: "#101418"
     title: qsTr("tvshell")
 
-    // "home", "settings", "photos" (an album's or memory's grid), "viewer" or "youtube".
+    // "home", "settings", "photos" (an album's or memory's grid) or "viewer".
     property string page: "home"
     // When the shell stepped aside for Quick Access (ms timestamp, 0 = not pending).
     property double quickAccessHandoff: 0
@@ -26,44 +27,56 @@ Window {
     // the screen when the remote's YouTube key opened it.
     property string youtubeReturnPage: "home"
     property bool youtubeReturnToSteam: false
-    // The managed app that has the screen in place of the shell (Jellyfin, a Switch game in
-    // Eden), or null.
+    // The managed app that has the screen in place of the shell (YouTube, Jellyfin, a Switch
+    // game in Eden), or null.
     property ManagedApp shownApp: null
+    readonly property var apps: [youtube, jellyfin, eden]
 
-    // Show a managed app, starting it if needed and continuing it if it was left paused.
-    // The shell stays on screen until its window is there.
+    // Show a managed app, starting it if needed and continuing it if leaving it paused it.
+    // The shell stays on screen until its window is there. What plays in the background goes
+    // on until the app plays something itself (onlyOnePlaying).
     function openApp(app) {
-        if (app === jellyfin)
-            appQuitTimer.stop()
-        if (youtube.playing)
-            youtube.pause()
         app.start()
         app.resume()
         shownApp = app
     }
 
-    // Back to the shell: the app pauses. Jellyfin stays loaded for a while; a game stays
-    // parked as it is until it is opened again or closed.
+    // Back to the shell. What plays on in the background (by the Settings: music, podcasts)
+    // carries on; anything else pauses. What
+    // happens to the app then is up to Settings (Apps): it stays, or it is closed after a
+    // while; a game stays parked as it is until it is opened again or closed.
     function leaveApp() {
         if (!shownApp)
             return
         const app = shownApp
-        app.pause()
+        if (!app.background)
+            app.pauseWhileAway()
         shownApp = null
-        if (app === jellyfin)
-            appQuitTimer.restart()
+    }
+
+    // One thing plays at a time: when an app starts playing, the others pause (for good: they
+    // don't continue by themselves when opened again).
+    function onlyOnePlaying(app) {
+        for (const other of apps) {
+            if (other !== app && other.playing)
+                other.pause()
+        }
     }
 
     function openYouTube() {
-        if (page !== "youtube") {
-            youtubeReturnPage = page
-            youtubeReturnToSteam = baseLayer.available && !baseLayer.onScreen
-        }
-        showPage("youtube")
+        if (shownApp === youtube)
+            return
+        youtubeReturnPage = page
+        // Coming from another app the shell wasn't on screen, but Steam didn't have it either.
+        youtubeReturnToSteam = baseLayer.available && !baseLayer.onScreen && shownApp === null
+        leaveApp()
+        openApp(youtube)
     }
 
+    // YouTube's own way back (Back on its account picker, its Exit): to where it was opened
+    // from.
     function leaveYouTube() {
-        youtube.leave()
+        leaveApp()
         showPage(youtubeReturnPage)
         if (youtubeReturnToSteam)
             baseLayer.claim = false
@@ -77,8 +90,6 @@ Window {
             photoGrid.forceActiveFocus()
         else if (name === "viewer")
             photoViewer.forceActiveFocus()
-        else if (name === "youtube")
-            youtube.open()
         else
             home.forceActiveFocus()
     }
@@ -111,20 +122,13 @@ Window {
 
     // Close ends the program the way it ends itself; force close is for one that doesn't.
     function closeTile(appId, force) {
-        if (appId === "youtube") {
-            youtube.unload()
-        } else if (appId === "jellyfin") {
-            appQuitTimer.stop()
-            if (force)
-                jellyfin.kill()
-            else
-                jellyfin.quit()
-        } else if (appId === "ringfit") {
-            if (force)
-                eden.kill()
-            else
-                eden.quit()
-        }
+        const app = appId === "youtube" ? youtube : appId === "jellyfin" ? jellyfin : appId === "ringfit" ? eden : null
+        if (!app)
+            return
+        if (force)
+            app.kill()
+        else
+            app.quit()
     }
 
     // Starting a game from the shell. With a Switch game parked: ask first whether to close
@@ -144,7 +148,7 @@ Window {
     }
 
     function launchPendingGame() {
-        if (youtube.background && youtube.playing) {
+        if (youtube.playing && youtube.background) {
             gameDialog.title = qsTr("Start %1?").arg(pendingGameName)
             gameDialog.open()
         } else {
@@ -181,8 +185,6 @@ Window {
                 powerDialog.close()
             if (gameDialog.visible)
                 gameDialog.close()
-            if (root.page === "youtube")
-                youtube.leave()
             root.leaveApp()
             root.showPage("home")
             if (alreadyHome) {
@@ -197,12 +199,7 @@ Window {
             idle.wake()
             if (powerDialog.visible)
                 powerDialog.close()
-            const fromApp = root.shownApp !== null
-            root.leaveApp()
             root.openYouTube()
-            // Coming from a managed app the shell wasn't on screen, but Steam didn't have it either.
-            if (fromApp)
-                root.youtubeReturnToSteam = false
             claim = true
         }
         // The remote's Netflix key: Jellyfin, from anywhere (not over a running game for now).
@@ -214,8 +211,9 @@ Window {
                 powerDialog.close()
             if (gameDialog.visible)
                 gameDialog.close()
-            if (root.page === "youtube")
-                youtube.leave()
+            if (root.shownApp === jellyfin)
+                return
+            root.leaveApp()
             root.showPage("home")
             root.openApp(jellyfin)
             claim = true
@@ -241,27 +239,39 @@ Window {
         // Also over a managed app: a paused film or an untouched menu gets the screensaver too.
         counting: baseLayer.onScreen || baseLayer.frontAppOnScreen || !baseLayer.available
         // Foreground activity: a video that is playing, wherever it plays. Not a music track
-        // in YouTube that only shows its cover; that is background (audioPlaying).
-        watching: photoViewer.playing || (root.page === "youtube" && youtube.playing && !youtube.coverOnly)
-                  || (root.shownApp !== null && root.shownApp.playing)
-        // Music (in YouTube, shown or in the background): screensaver and a black screen as
-        // usual, but the sound's signal stays and the machine doesn't sleep.
-        audioPlaying: youtube.playing && youtube.music
+        // that only shows its cover; that is background (audioPlaying).
+        watching: photoViewer.playing || (root.shownApp !== null && root.shownApp.playing && !root.shownApp.coverOnly)
+        // What plays on in the background (music, podcasts; shown or not): screensaver and a
+        // black screen as usual, but
+        // the sound's signal stays and the machine doesn't sleep.
+        audioPlaying: root.apps.some(app => app.playing && app.background)
         // The machine sleeps only once the remote has let go: then the remote can wake it.
         remoteConnected: remoteLink.connected
         onAboutToSleep: {
-            youtube.pause()
-            jellyfin.pause()
-            eden.pause()
+            for (const app of root.apps)
+                app.pause()
         }
         // Screen off over something playing (the remote's Power): it pauses. Music goes on.
         onStateChanged: {
-            if (state === IdleController.Active)
-                return
-            if (root.shownApp !== null)
+            if (state !== IdleController.Active && root.shownApp !== null && !root.shownApp.background)
                 root.shownApp.pause()
-            if (root.page === "youtube" && youtube.playing && !youtube.music)
-                youtube.pause()
+        }
+    }
+
+    // YouTube, a web app (apps/webapp) shown in place of the shell like Jellyfin. Its player
+    // is Chromium's; whether what it plays keeps playing when left comes from the web app,
+    // which decides by the kinds chosen in Settings (YouTube).
+    ManagedApp {
+        id: youtube
+        unit: "webapp@youtube.service"
+        windowClass: "webapp-youtube"
+        appId: 0x7E000004
+        mprisName: "org.mpris.MediaPlayer2.chromium.instance"
+        mediaKindName: "local.webapp.youtube"
+        onPlayingChanged: if (playing) root.onlyOnePlaying(youtube)
+        onExited: {
+            if (root.shownApp === youtube)
+                root.shownApp = null
         }
     }
 
@@ -272,16 +282,11 @@ Window {
         windowClass: "jellyfin-desktop"
         appId: 0x7E000002
         mprisName: "org.mpris.MediaPlayer2.JellyfinDesktop"
+        onPlayingChanged: if (playing) root.onlyOnePlaying(jellyfin)
         // Quit from its own menu, or crashed: the shell is back by itself.
         onExited: {
             if (root.shownApp === jellyfin)
                 root.shownApp = null
-        }
-        // Found running when the shell started, or started by hand: it closes like one that
-        // was left.
-        onRunningChanged: {
-            if (running && root.shownApp !== jellyfin)
-                appQuitTimer.restart()
         }
     }
 
@@ -295,6 +300,8 @@ Window {
         appId: 0x7E000003
         mprisName: "org.mpris.MediaPlayer2.eden"
         allWindows: true
+        alwaysResume: true
+        onPlayingChanged: if (playing) root.onlyOnePlaying(eden)
         onExited: {
             if (root.shownApp === eden)
                 root.shownApp = null
@@ -306,17 +313,31 @@ Window {
         id: controllerClient
     }
 
-    // Back at the top level of a managed app: it asks for the shell, like Home.
+    // Back at the top level of a managed app: it asks for the shell, like Home. YouTube goes
+    // back to where it was opened from.
     ShellService {
-        onLeaveAppRequested: root.leaveApp()
+        onLeaveAppRequested: {
+            if (root.shownApp === youtube)
+                root.leaveYouTube()
+            else
+                root.leaveApp()
+        }
         // Home on a Joy-Con does what Home on the remote does.
         onControllerHomePressed: baseLayer.homePressed()
     }
 
-    // A managed app left with Home stays loaded this long, then it is quit.
+    // An app that is loaded, not shown and not playing closes after the time set in
+    // Settings (Apps), counted from when it was left or stopped playing. Also one found
+    // running when the shell started.
     Timer {
-        id: appQuitTimer
-        interval: 600000
+        interval: Math.max(1, appSettings.closeAfter.youtube) * 1000
+        running: appSettings.closeAfter.youtube > 0 && youtube.running && root.shownApp !== youtube && !youtube.playing
+        onTriggered: youtube.quit()
+    }
+
+    Timer {
+        interval: Math.max(1, appSettings.closeAfter.jellyfin) * 1000
+        running: appSettings.closeAfter.jellyfin > 0 && jellyfin.running && root.shownApp !== jellyfin && !jellyfin.playing
         onTriggered: jellyfin.quit()
     }
 
@@ -379,14 +400,6 @@ Window {
         id: mediaProxy
     }
 
-    // One source of sound at a time: a photo's video pauses the music.
-    Connections {
-        target: photoViewer
-        function onPlayingChanged() {
-            if (photoViewer.playing && youtube.playing)
-                youtube.pause()
-        }
-    }
 
     FocusScope {
         id: home
@@ -418,11 +431,20 @@ Window {
             KeyNavigation.down: home.currentPlace
             onSettingsActivated: root.showPage("settings")
 
+            // YouTube while it isn't shown: playing on in the background (music, say), playing
+            // or paused (the web app ends it after a while paused), where OK plays and pauses
+            // it; or a video that leaving paused, where OK opens YouTube to continue it.
             nowPlayingSource: "youtube"
-            nowPlayingTitle: !youtube.background ? "" : youtube.title.length > 0 ? youtube.title : qsTr("YouTube")
+            nowPlayingTitle: root.shownApp === youtube || !(youtube.background || youtube.pausedWhileAway) ? ""
+                           : youtube.title.length > 0 ? youtube.title : qsTr("YouTube")
             nowPlayingArtist: youtube.artist
             nowPlayingPaused: !youtube.playing
-            onNowPlayingActivated: youtube.togglePlay()
+            onNowPlayingActivated: {
+                if (youtube.background)
+                    youtube.togglePlay()
+                else
+                    root.openYouTube()
+            }
         }
 
         HomePlace {
@@ -482,34 +504,6 @@ Window {
         }
     }
 
-    YouTubePage {
-        id: youtube
-
-        anchors.fill: parent
-        // Playing in the background it stays "visible" to the page, so YouTube carries on as
-        // if it were on screen, but it isn't drawn.
-        visible: root.page === "youtube" || background
-        opacity: root.page === "youtube" ? 1 : 0
-        settings: youtubeSettings
-
-        onClosed: root.leaveYouTube()
-    }
-
-    // In YouTube, Back reaches the page as Escape (its "back"); on its account picker, Back
-    // leaves YouTube instead.
-    WebKeys {
-        id: webKeys
-
-        window: root
-        enabled: root.page === "youtube" && idle.state === IdleController.Active && !powerDialog.visible
-        onBackPressed: youtube.checkAccountPicker(atPicker => {
-            if (atPicker)
-                root.leaveYouTube()
-            else
-                webKeys.sendBack()
-        })
-    }
-
     PhotoGrid {
         id: photoGrid
 
@@ -549,6 +543,7 @@ Window {
         screensaver: screensaverSettings
         viewer: viewerSettings
         youtube: youtubeSettings
+        apps: appSettings
         immich: immich
         controllers: controllerClient
 
@@ -559,8 +554,8 @@ Window {
         id: gameDialog
 
         anchors.fill: parent
-        message: qsTr("Music is playing.")
-        choices: [qsTr("Pause the music and play"), qsTr("Keep the music playing"), qsTr("Cancel")]
+        message: qsTr("YouTube is playing.")
+        choices: [qsTr("Pause it and play"), qsTr("Keep it playing"), qsTr("Cancel")]
 
         onChosen: index => {
             if (index === 0)
@@ -629,6 +624,10 @@ Window {
 
     YouTubeSettings {
         id: youtubeSettings
+    }
+
+    AppSettings {
+        id: appSettings
     }
 
     SystemVolume {

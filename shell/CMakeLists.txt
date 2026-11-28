@@ -9,7 +9,7 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # Pinned to what SteamOS 3.9.5 ships (see toolchains/steamos-3.9).
-find_package(Qt6 6.11 REQUIRED COMPONENTS DBus Gui Multimedia Network Quick WebEngineQuick)
+find_package(Qt6 6.11 REQUIRED COMPONENTS DBus Gui Multimedia Network Quick)
 find_package(SDL3 3.4 REQUIRED CONFIG)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(XCB REQUIRED IMPORTED_TARGET xcb xcb-xtest)
@@ -40,6 +40,9 @@ target_link_libraries(miniaudio
         m
 )
 
+# Code the shell shares with the programs it shows (../shared).
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../shared shared)
+
 # One module per topic, each a static library with its C++ and QML (see DEVELOPMENT.md).
 add_subdirectory(common)
 add_subdirectory(session)
@@ -68,6 +71,7 @@ qt_add_qml_module(tvshell
     DEPENDENCIES
         TARGET tvshell_common
         TARGET tvshell_session
+        TARGET tvshared_input
         TARGET tvshell_power
         TARGET tvshell_audio
         TARGET tvshell_photos
@@ -83,13 +87,13 @@ target_link_libraries(tvshell
     PRIVATE
         Qt6::Gui
         Qt6::Quick
-        Qt6::WebEngineQuick
         PkgConfig::XCB
         # main.cpp sets up the network layer with the photos' rule.
         tvshell_common
         tvshell_photos
         tvshell_commonplugin
         tvshell_sessionplugin
+        tvshared_inputplugin
         tvshell_powerplugin
         tvshell_audioplugin
         tvshell_photosplugin

@@ -1,14 +1,19 @@
-#include "WebKeys.h"
+#include "ShellClient.h"
 
 #include <QCoreApplication>
+#include <QDBusConnection>
+#include <QDBusMessage>
 #include <QKeyEvent>
+#include <QLoggingCategory>
 
-WebKeys::WebKeys(QObject *parent)
+Q_LOGGING_CATEGORY(lcShell, "webapp.shell")
+
+ShellClient::ShellClient(QObject *parent)
     : QObject(parent)
 {
 }
 
-void WebKeys::setWindow(QWindow *window)
+void ShellClient::setWindow(QWindow *window)
 {
     if (m_window == window)
         return;
@@ -20,16 +25,15 @@ void WebKeys::setWindow(QWindow *window)
     emit windowChanged();
 }
 
-void WebKeys::setEnabled(bool enabled)
+void ShellClient::setEnabled(bool enabled)
 {
     if (m_enabled == enabled)
         return;
     m_enabled = enabled;
-    m_heldFromBefore = enabled;
     emit enabledChanged();
 }
 
-void WebKeys::sendBack()
+void ShellClient::sendEscape()
 {
     if (!m_window)
         return;
@@ -39,18 +43,19 @@ void WebKeys::sendBack()
     }
 }
 
-bool WebKeys::eventFilter(QObject *, QEvent *event)
+void ShellClient::leave()
+{
+    qCInfo(lcShell) << "asking the shell to take the screen back";
+    QDBusConnection::sessionBus().send(QDBusMessage::createMethodCall(
+        QStringLiteral("local.tvshell"), QStringLiteral("/local/tvshell"), QStringLiteral("local.tvshell"),
+        QStringLiteral("LeaveApp")));
+}
+
+bool ShellClient::eventFilter(QObject *, QEvent *event)
 {
     if (!m_enabled || (event->type() != QEvent::KeyPress && event->type() != QEvent::KeyRelease))
         return false;
     const auto *key = static_cast<QKeyEvent *>(event);
-    if (m_heldFromBefore) {
-        // The rest of the press that opened the page (its repeats and its release) isn't
-        // meant for the page: YouTube would take it as OK and start a video.
-        if (event->type() != QEvent::KeyPress || key->isAutoRepeat())
-            return true;
-        m_heldFromBefore = false;
-    }
     if (key->key() != Qt::Key_Back)
         return false;
     if (event->type() == QEvent::KeyPress && !key->isAutoRepeat())

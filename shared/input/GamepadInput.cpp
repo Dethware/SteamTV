@@ -8,7 +8,7 @@
 
 #include <cstdlib>
 
-Q_LOGGING_CATEGORY(lcGamepad, "tvshell.gamepad")
+Q_LOGGING_CATEGORY(lcGamepad, "tv.gamepad")
 
 namespace {
 

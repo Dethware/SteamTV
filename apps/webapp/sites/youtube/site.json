@@ -1,0 +1,11 @@
+{
+    "name": "YouTube",
+    "url": "https://www.youtube.com/tv",
+    "userAgent": "Mozilla/5.0 (Linux x86_64) Cobalt/25.lts.30.1034943-gold (unlike Gecko) v8/12.4 gles Starboard/16, Valve_OTT_SteamMachine_2026/3.9.5 (Valve, SteamMachine, Wired)",
+    "scripts": [
+        { "file": "mediacaps.js", "world": "main", "at": "creation" },
+        { "file": "youtube.js", "world": "main", "at": "creation" },
+        { "file": "sponsorskip.js", "world": "application", "at": "ready" }
+    ],
+    "fetch": ["https://sponsor.ajay.app/api/"]
+}

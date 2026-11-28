@@ -13,7 +13,9 @@ How it's built: [DEVELOPMENT.md](DEVELOPMENT.md).
   TVs use, with all its accounts, playing at up to the screen's resolution (4K on a 4K
   screen). Sponsor segments in videos are skipped (SponsorBlock), with
   a short note on screen; Settings chooses what else to skip. And Jellyfin, for your films and
-  shows: its own TV interface, playing files directly.
+  shows: its own TV interface, playing files directly. Both are programs of their own
+  (YouTube: `../apps/webapp`), so they stay where you left them when the shell restarts.
+  Opening one the first time takes a few seconds, during which the shell stays on screen.
 - **Games**: your installed Steam games. OK starts one; when it ends, you're back in the shell.
 - **Photos**: photos from an Immich server. "On this day" memories and your albums, in
   groups by the year of their newest photo with the newest album first. Moving up and down
@@ -35,12 +37,17 @@ How it's built: [DEVELOPMENT.md](DEVELOPMENT.md).
   stays off until you press a button. If nobody does (someone only moved it), the machine
   goes back to sleep about 30 minutes later. Controllers and the machine's power button
   wake it with the screen on.
-- **Music in the background**: leave YouTube while music is playing (what YouTube itself
-  marks as music) and it plays on; anything else pauses. The top bar then shows the title
-  and artist: OK there pauses and resumes, the YouTube button goes back to it. While music
-  plays, the screensaver and the screen-off time work as usual, but the screen only goes
-  black (the sound stays) and the machine doesn't sleep. Starting a game asks whether to
-  pause the music first; a photo's video pauses it. Paused for 10 minutes, it's put away.
+- **Music in the background**: leave YouTube while music or a podcast is playing (what
+  YouTube itself marks so) and it plays on; an ordinary video pauses. Settings, YouTube,
+  chooses which of songs, music videos, podcasts and other videos play on. The top bar then
+  shows the title and artist: OK there pauses and resumes, the YouTube button goes back to
+  it. While it plays, the screensaver and the screen-off time work as usual, but the screen
+  only goes black (the sound stays) and the machine doesn't sleep. Paused for 10 minutes,
+  it's put away. When Jellyfin or a game starts playing, it pauses and stays paused;
+  starting a Steam game asks first. A photo's video plays over it.
+- **A paused video**: leaving YouTube pauses a video, which then shows in the top bar; OK
+  there, the tile or the YouTube button open YouTube and continue it. A video you paused
+  yourself stays paused.
 - **Volume**: with the remote's volume and Mute buttons sending infrared to the TV (see
   Remote, below), the TV changes the sound and shows it; the shell doesn't hear them. Otherwise, volume buttons show a small indicator in the top right
   corner, over whatever is on screen, also when the volume is already at either end. Mute
@@ -77,16 +84,16 @@ and "Turn on TV when resuming from sleep".
 The top bar holds the places (Home, Games, Photos) and Settings: left/right move along it,
 OK switches place, Down goes in. Back inside a place returns to the top bar.
 
-In YouTube, Back is YouTube's own back. On its "Who's watching?" screen, Back leaves YouTube
-for whatever was open before. Home pauses a video (opening YouTube again carries on) and
-leaves music playing.
+In YouTube, Back is YouTube's own back. On its "Who's watching?" screen, Back (or YouTube's
+own Exit) leaves YouTube for whatever was open before, Steam included. Home pauses a video
+(opening YouTube again carries on) and leaves music playing.
 
 In Jellyfin, the arrows, OK and Back move around; while something plays, Left and Right seek.
 On the controller the d-pad or either stick moves, A is OK, B is Back, the bumpers seek, X
 pauses and Y searches. Home pauses and returns to the shell, and so does Back on Jellyfin's start screen;
 the Jellyfin tile (or the remote's Netflix button) brings it back where it was. Left alone for ten minutes it closes; what you were
-watching resumes from Jellyfin's "Continue watching". A paused film or an untouched menu gets
-the screensaver like the shell does.
+watching resumes from Jellyfin's "Continue watching" (Settings, Apps, changes how long, or
+keeps it). A paused film or an untouched menu gets the screensaver like the shell does.
 
 **Ring Fit Adventure** (the tile on Home) runs in the Switch emulator Eden with the
 Joy-Cons, the leg strap and the Ring-Con (`../apps/eden`). Form the controller first: L on
@@ -135,9 +142,14 @@ removes them, and the buttons reach the machine again.
 
 In the shell: Settings in the top bar, or Start on the controller. Power (when the
 screensaver, screen off and sleep start), Controllers (below), Screensaver (albums, time per photo, transition,
-background, date and place), Photos (transition and background in the viewer) and YouTube
-(what SponsorBlock skips: sponsors, self-promotion, reminders, intros, outros, recaps,
-non-music parts, filler; only sponsors at first). Changes apply at once.
+background, date and place), Photos (transition and background in the viewer), Apps
+(the web app suspend time: how long a web app such as YouTube stays open when you leave it
+with nothing playing before it is suspended, half an hour at first, after which opening
+YouTube reloads the video where it was; and whether YouTube and Jellyfin stay loaded, or close after 10 minutes, 30 minutes or an hour; at
+first YouTube stays and Jellyfin closes after 10 minutes) and YouTube (what keeps playing when you leave it: songs that show only their
+cover, music videos and podcasts at first, other videos too if you like; and what
+SponsorBlock skips: sponsors, self-promotion, reminders, intros, outros, recaps, non-music
+parts, filler; only sponsors at first). Changes apply at once.
 
 **Controllers** shows Nintendo's controllers (Joy-Cons and the Pro Controller), if the
 controller service is installed (`../controllers`). Go into the list with Right or OK:
@@ -165,11 +177,11 @@ that grab on purpose, so that a stray push of a stick doesn't reassign the playe
 returns to the categories. Controllers in use
 can feel sluggish while you are in the list, because the search shares their radio.
 
-For the skipping, the shell asks the SponsorBlock service (sponsor.ajay.app) about each video
-you watch, by the first characters of a hash of its ID, not the ID itself. With every switch
-off, it asks nothing.
+For the skipping, YouTube's program asks the SponsorBlock service (sponsor.ajay.app) about
+each video you watch, by the first characters of a hash of its ID, not the ID itself. With
+every switch off, it asks nothing.
 
-They are saved in `~/.config/tvshell/tvshell.conf`:
+They are saved in `~/.config/tvshell/tvshell.conf`, except YouTube's (below):
 
 | Group | Key | Meaning |
 |---|---|---|
@@ -180,7 +192,16 @@ They are saved in `~/.config/tvshell/tvshell.conf`:
 | | `background` | `blur`, `gradient` or `black` |
 | | `showInfo` | date and place on or off |
 | `[viewer]` | `transition`, `background` | as above, for the photo viewer |
-| `[youtube]` | `skipCategories` | SponsorBlock categories to skip, e.g. `sponsor, intro` |
+| `[apps]` | `youtube/closeAfter`, `jellyfin/closeAfter` | seconds an app left with nothing playing stays loaded, 0 = until closed |
+
+The web app suspend time is `suspendAfter` (seconds, 0 = never) in
+`~/.config/tvshell/apps/webapp.conf`, which every web app reads. YouTube's own are in
+`~/.config/tvshell/apps/youtube.conf`:
+
+| Key | Meaning |
+|---|---|
+| `backgroundKinds` | what keeps playing when you leave YouTube: `song`, `music-video`, `podcast`, `video` |
+| `skipCategories` | SponsorBlock categories to skip, e.g. `sponsor, intro` |
 
 ## Install
 
@@ -196,7 +217,8 @@ Needs Docker on your computer and SSH access to the Steam Machine as `deck@gabec
 
 ## Limitations
 
-- Music that YouTube doesn't mark as music pauses like any video when you leave YouTube.
+- Music counts as music when YouTube marks it so, or offers "Switch to audio" for it; music
+  it does neither for counts as an ordinary video.
 - With the screen black for music, changing the volume turns the picture back on.
 - After sleep from the machine's power button or Steam's power menu, the remote can't
   wake the machine; a controller or the power button can.

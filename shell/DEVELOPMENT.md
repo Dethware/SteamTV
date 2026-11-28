@@ -18,11 +18,12 @@ Sizes in QML are for a screen 1440 pixels high. `main.cpp` reads the X screen's 
 1080p); an explicit `QT_SCALE_FACTOR` wins. The factor can't change in a running program, so
 when the screen's size changes the shell exits with code 75 and systemd starts it again
 (`Restart=on-failure`). Images from the network aren't scaled by Qt: photo layers and tiles
-ask for `sourceSize` times `Screen.devicePixelRatio`. The YouTube page sees 2560x1440 CSS
-pixels at that device pixel ratio.
+ask for `sourceSize` times `Screen.devicePixelRatio`.
 
-`Main.qml` holds the pages (`page`: `home`, `settings`, `photos`, `viewer`, `youtube`)
-and wires the C++ objects together; each page and place is its own QML file.
+`Main.qml` holds the pages (`page`: `home`, `settings`, `photos`, `viewer`) and wires the
+C++ objects together; each page and place is its own QML file. The apps it shows in its
+place (YouTube, Jellyfin, Eden) are programs of their own (Managed apps, below); the shell
+uses no web engine itself.
 
 ## Layout
 
@@ -35,16 +36,17 @@ own too when it uses the module's C++ types.
 |---|---|---|
 | (top) | `TvShell` | `main.cpp`, `Main.qml`, `TopBar.qml`, `SettingsPage.qml`: what puts the topics together |
 | `common/` | `TvShell.Common` | The network layer, and controls used across topics (`ChoiceDialog`, `FitGrid`, `BarButton`, `SettingRow`) |
-| `session/` | `TvShell.Session` | Taking the screen, global keys, controller input, the session bus service, Steam's log |
+| `session/` | `TvShell.Session` | Taking the screen, global keys, the session bus service, Steam's log |
 | `power/` | `TvShell.Power` | Idle (screensaver → screen off → sleep), the remote's connection for sleep, the power dialog |
 | `audio/` | `TvShell.Audio` | The system volume and its display, what plays in the background |
 | `photos/` | `TvShell.Photos` | Immich, the photos place, the viewer, the screensaver, place names |
 | `steam/` | `TvShell.Steam` | Steam's installed games and the games place |
 | `switch/` | `TvShell.Switch` | A Switch game's name and icon, read from its file by the shell itself (`format/`, also built into the `switch-gameinfo` tool) |
-| `apps/` | `TvShell.Apps` | Programs the shell starts and shows (`ManagedApp`), the Home place, app tiles and logos |
-| `youtube/` | `TvShell.YouTube` | The YouTube page, its settings, SponsorBlock, the key filter |
+| `apps/` | `TvShell.Apps` | Programs the shell starts and shows (`ManagedApp`), how long they stay loaded (`AppSettings`), the Home place, app tiles and logos |
+| `youtube/` | `TvShell.YouTube` | YouTube's settings, for the web app that is YouTube (`../apps/webapp`) |
 | `controllers/` | `TvShell.Controllers` | The controller service's client, the Controllers settings, the motion test |
 | `assistant/` | `TvShell.Assistant` | The remote's Assistant button and voice |
+| `../shared/input/` | `TvShared.Input` | Controller input as keys (`GamepadInput`), shared with the web app (`../shared/DEVELOPMENT.md`) |
 
 Dependencies point one way: topics may use `common/` (and `audio/` uses `apps/` for the
 logos); `common/` knows none of them. Where `common/` needs something of a topic, the topic
@@ -90,7 +92,7 @@ own window and Power looked stuck down. A held key auto-repeats as release/press
 after a resume (logind `PrepareForSleep`). The shell holds a logind `handle-suspend-key`
 inhibitor lock so logind doesn't suspend on Power itself.
 
-### Controller and keys (`session/GamepadInput.*`)
+### Controller and keys (`../shared/input/GamepadInput.*`)
 
 Each controller's sticks are kept by themselves, and the one pushed furthest decides the
 direction. Steam's virtual pad of a controller that lies untouched still sends its
@@ -106,7 +108,7 @@ twice, in two layouts. A = Return, B/Back = Back,
 Start = Menu, d-pad and both sticks = arrows with repeat (whichever stick is pushed further
 decides; the right one is there for one-handed use, next to the buttons); LB/RB are a signal
 (`shoulderPressed`), not keys. Only while the shell is on screen and active, since the same
-pad feeds games. YouTube gets these keys like the rest of the shell. The sticks count only
+pad feeds games; the web app reads it for itself while it is shown. The sticks count only
 while the shell is fully awake (`sticks`): a
 thumb resting on a Steam Controller trackpad that Steam maps to the stick ended the
 screensaver.
@@ -119,9 +121,10 @@ screen. Activity: keys reaching the shell, controller input (also during games),
 Return through to the screensaver; other keys only wake.
 
 Three kinds of activity hold the chain back. Input restarts the idle time. Foreground
-(`watching`, set in `Main.qml`: a photo's video, a YouTube video that isn't a cover-only
-music track, a managed app that is playing) stops the chain altogether, and when it ends the
-idle time counts from that moment. Background (`audioPlaying`, music) lets the screensaver
+(`watching`, set in `Main.qml`: a photo's video, the shown app playing something that isn't
+a song showing only its cover) stops the chain altogether, and when it ends the idle time
+counts from that moment. Background (`audioPlaying`: an app playing what keeps playing when
+it is left, such as music, shown or not) lets the screensaver
 and a black screen come but keeps the signal and the machine awake. The time since the last
 input is kept separate from the other two, so a sleep timer that ignores what is playing can
 be added on top of it.
@@ -154,8 +157,10 @@ resume).
 Screen off is
 `gamescopectl drm_sleep_external_screen 1`. Screen on (`0`) is sent on waking and after every
 resume, then three more times two seconds apart: sent once right after a resume it can go
-unheeded, and the screen then stays dark (see the log, 2026-11-22). Videos and YouTube keep
-it awake while playing (a timer in `Main.qml` reporting activity).
+unheeded, and the screen then stays dark (see the log, 2026-11-22). What is being watched
+(`watching`) keeps it awake. A shell that starts (a deploy, a restart) sends screen on once
+too, and `TvPower` wakes the TV once: gamescope may still have the screen asleep from the
+shell before, and both only act on changes otherwise.
 
 ### Screensaver (`photos/Screensaver.qml`, `ScreensaverLayer.qml`, `PhotoBackdrop.qml`, `PhotoInfo.qml`, `photos/ScreensaverSettings.*`)
 
@@ -222,95 +227,85 @@ town, from `places.tsv` next to the program, made by `./make-places.py` from Geo
 administrative level is the town. Elsewhere, or without the list, Immich's `city, country`.
 Immich's own names are too coarse; see the log, "Place names".
 
-### YouTube (`apps/HomePlace.qml`, `youtube/YouTubePage.qml`, `youtube/WebKeys.*`)
-
-`youtube.com/tv` in a Qt WebEngine `WebEngineView`, created on first open and kept. Its
-profile (`storageName` "youtube", forced persistent cookies) lives in
-`~/.local/share/tvshell/QtWebEngine/youtube`. The page sends a user agent in the format of YouTube's TV app platform (Cobalt), naming
-the device as it is (Valve, SteamMachine): without a TV user agent `/tv` redirects to the
-desktop site, and YouTube picks the app's quality tier from it (this one gets
-`TV_APP_QUALITY_FULL_ANIMATION`; see the log, "YouTube"). Leaving a video pauses every `<video>` and then
-freezes the page (`lifecycleState` Frozen; a visible page can't be frozen); opening sets it
-Active again. `recentlyAudible` keeps the screen awake. YouTube's own Exit calls
-`window.close()` (`windowCloseRequested`).
-
-`WebKeys` filters the window's key events while YouTube is shown: Back is taken and reported
-(`backPressed`). The account picker has the same address as YouTube's home (`/tv#/`), so
-`YouTubePage.checkAccountPicker` asks the page whether a `ytlr-account-selector` element is
-visible; if so the shell leaves YouTube, otherwise `WebKeys.sendBack()` hands the page
-Escape, YouTube's back. Leaving returns to the page YouTube was opened from, or gives the
-screen back to Steam if Steam had it when the YouTube key was pressed. When the filter
-becomes active (YouTube opened, the screensaver or the power dialog closed over it), it keeps
-everything from the page until the next fresh key press: the repeats and the release of the
-press that got us there would otherwise count as OK in YouTube and start a video.
-
-Resolution (`youtube/mediacaps.js`): YouTube's TV player asks `MediaSource.isTypeSupported()`
-about width, height, frame rate, bitrate and more, including trick questions (`width=99999`,
-`eotf=catavision`) that a TV's browser answers with no. Chromium ignores those parameters
-and says yes to all of it, so the player distrusts every answer and stays at 720p. The
-script, injected into the page's own world before its scripts, answers them: up to the
-screen's real resolution, 60 frames a second, standard dynamic range only. With it the
-player offers up to 2160p.
-
-Background music: once a second while the page runs, `YouTubePage.readPlayer()` asks the
-page for the main video's state, the player's `getPlayerResponse().videoDetails.musicVideoType`
-(YouTube's own music mark; absent on ordinary videos) and `navigator.mediaSession.metadata`
-(title, artist). `leave()` keeps the page going when music is playing (`background`),
-otherwise it suspends as before. In the background the page item stays `visible` with
-opacity 0 (`Main.qml`), so the page still counts as shown and YouTube carries on, but nothing
-is drawn; the video is still decoded. The top bar's `NowPlayingButton` shows it (source icon, state mark,
-title and artist) and toggles pause; ten minutes paused ends the session. `IdleController.audioPlaying` (playing and
-music, shown or not) keeps the signal on in the screen-off state (the shell draws black
-instead) and holds off suspend; it only counts as stopped after 20 s without playing, since
-the player reports a short stop between two tracks; `aboutToSleep` pauses it. A game started from the shell goes
-through `Main.launchGame()`, which asks with a `ChoiceDialog` while music plays in the
-background. A photo's video pauses it.
-
-SponsorBlock (`youtube/SponsorBlock.*`, `youtube/YouTubeSettings.*`, `youtube/sponsorskip.js`): the page's
-address carries the video (`#/watch?v=<id>`), which `YouTubePage.videoId` reads. `SponsorBlock`
-asks sponsor.ajay.app for the segments by the first four hex characters of the ID's SHA-256
-(the service's privacy mode), for the categories switched on in Settings, and keeps the
-entries of this video. `sponsorskip.js` is injected into the page as a user script in the
-application JavaScript world (the page's own scripts can't see it); the shell hands it the
-segments with `runJavaScript` in that world, and it checks the main `<video>` four times a
-second, seeks past a segment and shows a note. Its `console.log` lines starting with
-`tvshell:` go to the shell's log. Our own script rather than the SponsorBlock browser
-extension (Qt 6.10+ can load extensions): that one is written for the desktop site.
-
-### Managed apps: Jellyfin (`apps/ManagedApp.*`, `Main.qml`, `../apps/jellyfin-desktop`)
+### Managed apps (`apps/ManagedApp.*`, `apps/AppSettings.*`, `Main.qml`)
 
 A managed app is a separate program the shell starts and shows itself, without Steam:
-Jellyfin Desktop, and Eden with a Switch game (`../apps/eden`). It runs as its own user service
-(`jellyfin-desktop.service`, installed with the program), so restarting the shell doesn't end
-it and the shell picks a running one up again.
+YouTube (a web app, `../apps/webapp`), Jellyfin Desktop (`../apps/jellyfin-desktop`) and
+Eden with a Switch game (`../apps/eden`). Each runs as its own user service
+(`webapp@youtube.service`, `jellyfin-desktop.service`, `eden.service`, installed with the
+program), so restarting the shell doesn't end it and the shell picks a running one up again.
 
 `ManagedApp` does three things for one such program:
 
 - **Service:** follows the unit's `ActiveState` on systemd's session-bus API (`running`),
-  starts and stops it (`start()`, `quit()`), and reports when it ends on its own (`exited`).
+  starts and stops it (`start()`, `quit()`, `kill()`), and reports when it ends on its own
+  (`exited`).
 - **Window:** while the service runs, looks every half second for the largest top-level
   window with the program's `WM_CLASS` and tags it `STEAM_GAME=<appId>` (`ready`). The
   program doesn't know about gamescope; the tag is what lets `BaseLayer.frontApp` show it.
-- **Playback:** finds the program's MPRIS name by its prefix, follows `PlaybackStatus`
-  (`playing`) and calls `Pause` (`pause()`).
+- **Playback:** its player is the MPRIS name with the given prefix whose owner's process runs
+  in the app's unit (D-Bus `GetConnectionUnixProcessID`, then systemd's `GetUnitByPID`):
+  several programs may share a prefix, as every web app's player is Chromium's
+  (`org.mpris.MediaPlayer2.chromium.instance<pid>`). It follows `PlaybackStatus` (`playing`)
+  and `Metadata` (`title`, `artist`), and for a web app its own `local.webapp.<name>`
+  (`mediaKindName`): `background`, whether what is loaded keeps playing when the app is
+  left, and `coverOnly`. Other programs are never `background`.
+
+Pausing comes in two kinds. `pause()` pauses for good: it stays paused until someone plays
+it. `pauseWhileAway()` is the pause of leaving: `resume()` continues it when the app is
+opened again (`pausedWhileAway`), and nothing else. A parked game (`alwaysResume`, Eden)
+continues whatever paused it. For a web app the title of what leaving paused is kept even
+if its player forgets it, and `resume()` asks the web app itself (`local.webapp.<name>`
+`Resume`), which plays once the page is visible again.
+For other programs `resume()` sends MPRIS Play, waiting up to 5 s for the player to say
+`Paused` if it doesn't yet.
 
 `Main.qml` holds which app is shown (`shownApp`). `BaseLayer.frontApp` is that app's ID while
 it is ready, the idle state is Active and the power dialog is closed; otherwise the shell
 itself has the screen, which is how the screensaver, screen off and the dialog appear over
-it and how it returns afterwards. Home and the YouTube key call `leaveApp()` (pause, hide,
-start the ten-minute quit timer); the timer also starts for a program found running that
-isn't shown. The remote's Netflix key (`XF86Launch2`, grabbed like the others) opens it.
-`HomePlace.runningApps` marks the tiles of loaded apps: `ManagedApp.running`, and for
-YouTube a page that has been opened (frozen or not, it comes back where it was left). Idle time counts while the app is on screen
-(`frontAppOnScreen`); its `playing` reports activity like the shell's own videos do. Keys go
-to the app's window, so the shell sees input there only through gamescope's input counter.
+it and how it returns afterwards. The shell stays on screen until a starting app's window
+is there. The rules that span the apps:
 
-The other direction, the program asking for the shell, goes through `ShellService`
-(`session/ShellService.*`): the shell owns `local.tvshell` on the session bus, and its `LeaveApp`
-method does what Home does to the app. Jellyfin calls it when Back is pressed with nowhere
-to go back to: its web interface then asks the host to exit, and a patch in
-`../apps/jellyfin-desktop/patches` turns that into running a profile script that makes the
-call.
+- **Leaving** (`leaveApp()`: Home, the YouTube or Netflix key while another app is shown,
+  the app's `LeaveApp`): an app that is `background` plays on; any other is
+  `pauseWhileAway()`d. **Opening** (`openApp()`) starts the unit and `resume()`s.
+- **One thing plays at a time:** when an app starts playing, every other app that plays is
+  `pause()`d (`onlyOnePlaying`), so opening Jellyfin leaves YouTube's music alone until a
+  film starts. A photo's video doesn't pause anything.
+- **Suspending a left web app:** Settings, Apps, also has the web app suspend time, how
+  long any web app left with nothing playing stays open before it suspends its page
+  (`AppSettings.webAppSuspendAfter`, written to `~/.config/tvshell/apps/webapp.conf`; half
+  an hour). The web app counts it itself
+  (`../apps/webapp/DEVELOPMENT.md`, Suspending).
+- **Closing a left app:** an app that is running, not shown and not playing is closed after
+  the time in Settings, Apps (`AppSettings.closeAfter`, in `tvshell.conf` `[apps]`:
+  YouTube 0, kept; Jellyfin ten minutes), counted from when it was left or stopped playing,
+  also for one found running at start. Eden has no such timer: a parked game stays.
+- **Idle:** time counts while the app is on screen (`frontAppOnScreen`); its `playing`
+  (unless `coverOnly`) is foreground activity like the shell's own videos, and any app
+  playing `background` is `audioPlaying` (`IdleController`, Idle). Keys go to the app's
+  window, so the shell sees input there only through gamescope's input counter. Screen off
+  over an app pauses it unless it is `background`; `aboutToSleep` pauses every app.
+- **The top bar** (`NowPlayingButton`) shows YouTube while it isn't shown and either plays
+  on in the background (OK plays and pauses it, `togglePlay()`: MPRIS `PlayPause`) or was
+  paused by leaving (OK opens it, which continues it). The web app ends a background
+  session after ten minutes paused, which takes it off the bar.
+- A Steam game started from the shell (`Main.launchGame()`) asks with a `ChoiceDialog` while
+  YouTube plays in the background.
+
+YouTube is opened from its tile or the remote's YouTube key (`openYouTube()`), which
+remembers where it came from: a page of the shell, or Steam if Steam had the screen.
+YouTube's own way back (Back on its account picker, its Exit: both `LeaveApp`) returns
+there (`leaveYouTube()`); Home always goes to the shell. Its settings in Settings (what
+keeps playing when it is left, what SponsorBlock skips) are `youtube/YouTubeSettings`,
+written to `~/.config/tvshell/apps/youtube.conf`, which the web app reads.
+
+The other direction, a program asking for the shell, goes through `ShellService`
+(`session/ShellService.*`): the shell owns `local.tvshell` on the session bus, and its
+`LeaveApp` method does what Home does to the app (YouTube's goes back where it came from).
+Jellyfin calls it when Back is pressed with nowhere to go back to: its web interface then
+asks the host to exit, and a patch in `../apps/jellyfin-desktop/patches` turns that into
+running a profile script that makes the call. The web app calls it itself.
 
 `ShellService` also listens to the controller service (`../controllers`, `local.tvcontrollers`
 on the session bus): its `HomePressed` signal, Home on a Joy-Con, becomes
@@ -318,23 +313,23 @@ on the session bus): its `HomePressed` signal, Home on a Joy-Con, becomes
 it does exactly what Home on the remote does. The Joy-Cons' virtual controllers have no
 Home button, and nothing but that service can read a Joy-Con.
 
-What the program needs to behave on a TV (flags, controller settings, key map, logging) is in
-`../apps/jellyfin-desktop` and the log.
+What a program needs to behave on a TV (flags, controller settings, key map, logging) is in
+its own folder and the log. The remote's Netflix key (`XF86Launch2`, grabbed like the
+others) opens Jellyfin.
 
 Eden differs in three ways. It opens windows as it goes (its on-screen keyboard is a
 dialog the game waits behind), so with `allWindows` every window of its class is tagged,
-not only the largest. Left with Home it is paused and kept without a quit timer: a parked
-game, continued with `ManagedApp::resume()` (MPRIS `Play`) when its tile is opened; our
-Eden speaks that much MPRIS. And because a parked game holds about half the machine's
-memory, `launchGame` asks before a Steam game is started next to one (`parkedDialog`).
-It is paused before the machine sleeps, like the others.
+not only the largest. Left with Home it is paused and kept: a parked game, continued with
+`ManagedApp::resume()` (MPRIS `Play`) when its tile is opened; our Eden speaks that much
+MPRIS. And because a parked game holds about half the machine's memory, `launchGame` asks
+before a Steam game is started next to one (`parkedDialog`).
 
 On the Home place OK opens a tile when the key is let go; held for 0.6 s it brings up the
-tile's menu (`tileMenu` in `Main.qml`): Open, and for a loaded app Close and Force close.
-Close ends the program its own way (`ManagedApp::quit()` stops the unit; YouTube's page is
-unloaded), Force close kills the unit's processes (`ManagedApp::kill()`). `ChoiceDialog`
-takes no repeats of OK, so the key that is still held when the menu opens doesn't pick its
-first answer.
+tile's menu (`tileMenu` in `Main.qml`): Open, and for a loaded app (`ManagedApp.running`,
+`HomePlace.runningApps`) Close and Force close. Close ends the program its own way
+(`ManagedApp::quit()` stops the unit), Force close kills the unit's processes
+(`ManagedApp::kill()`). `ChoiceDialog` takes no repeats of OK, so the key that is still held
+when the menu opens doesn't pick its first answer.
 
 ### Controllers in Settings (`controllers/ControllerClient.*`, `controllers/ControllersPane.qml`)
 
@@ -477,7 +472,8 @@ notes: the log, "Voice protocol details".
 ## Build, deploy, debug
 
 `./build.sh` runs CMake and Ninja in the toolchain image (`tv/toolchains/steamos-3.9:dev`,
-`--network none`) and writes `build/tvshell`. `./deploy.sh` copies it (and
+`--network none`) and writes `build/tvshell`. It mounts the whole repository, for
+`../shared`. `./deploy.sh` copies it (and
 `build/places.tsv`) to `deck@gabecube:~/.local/share/tvshell/`, installs
 `deploy/tvshell.service` and restarts it.
 
@@ -492,21 +488,19 @@ into `~/.config/systemd/user/gamescope-session.target.wants/`: the shell then co
 Gaming Mode, before Steam has started, and takes the screen when Steam finishes starting.
 
 - `TVSHELL_NO_CLAIM=1` runs it without taking the screen.
-- `QTWEBENGINE_REMOTE_DEBUGGING=127.0.0.1:9222` (a unit drop-in) opens Chromium's DevTools
-  on gabecube for inspecting YouTube's page; reach it with `ssh -L 9222:127.0.0.1:9222`.
-  It exposes the signed-in session: remove it when done.
 - A start without a display, to catch QML errors before deploying (runs until the timeout;
-  anything QML prints is an error):
+  anything QML prints is an error; without `QT_FORCE_STDERR_LOGGING=1` Qt logs to the
+  journal and nothing shows):
 
       docker run --rm --network none -u "$(id -u):$(id -g)" -e HOME=/tmp \
-          -e QT_QPA_PLATFORM=offscreen -v "$PWD/build:/out:ro" \
+          -e QT_QPA_PLATFORM=offscreen -e QT_FORCE_STDERR_LOGGING=1 -v "$PWD/build:/out:ro" \
           tv/toolchains/steamos-3.9:dev timeout 8 /out/tvshell
 
 - A screenshot of what gamescope shows: `gamescopectl screenshot /tmp/x.png` on gabecube.
-- Logging categories: `tvshell.baselayer`, `tvshell.gamepad`, `tvshell.idle`,
+- Logging categories: `tvshell.baselayer`, `tv.gamepad`, `tvshell.idle`, `tvshell.tv`,
   `tvshell.power`, `tvshell.assistant`, `tvshell.audio`, `tvshell.immich`,
   `tvshell.mediaproxy`, `tvshell.steam`, `tvshell.steamlog`, `tvshell.volume`,
-  `tvshell.sponsorblock`, `tvshell.app`, `tvshell.service`.
+  `tvshell.app`, `tvshell.service`.
 
 ## Next
 
@@ -514,13 +508,6 @@ Gaming Mode, before Steam has started, and takes the screen when Steam finishes 
   soon as they have the focus, and values get changed by accident on the way through (the
   idle times, more than once). Make them work like a combo box: the row only shows its
   value; OK opens the list of choices, and nothing changes until one is picked there.
-- YouTube as a program of its own, shown like Jellyfin and Eden, in place of a page inside
-  the shell: today every restart of the shell (every deploy) loads it again, and it has
-  its own interface for a TV screen anyway. What the shell does with it now has to cross
-  to that program: opening and leaving it, pausing, whether something plays and whether
-  it is music (the top bar, the screensaver, music carrying on in the background), the
-  key filter. Its settings (what SponsorBlock skips) stay in the shell's Settings and are
-  handed to it; they don't move into something bolted onto YouTube's own pages.
 - Installed apps, defined outside the shell: an app is installed when it has a manifest
   (its name and other details) and an icon file, and the shell reads those in place of
   naming each app in its code and drawing its logo itself. The manifest would also say how
@@ -533,7 +520,7 @@ Gaming Mode, before Steam has started, and takes the screen when Steam finishes 
   and holds every rule that spans them (what counts as watching for idle, pausing
   everything before sleep, what Home does, asking about a parked game), and
   `SettingsPage` knows every module's settings. Candidates: something that plays (playing,
-  music, pause), a place (its tab and page), a settings section. Not designed ahead: kept
+  plays on in the background, pause; `ManagedApp` has it for the apps), a place (its tab and page), a settings section. Not designed ahead: kept
   in mind and shaped as things are added; the installed-app manifests are one such step.
 - An overlay layer: one place for what is shown on top of whatever has the screen (the
   volume display, probably the Assistant's ring).
@@ -557,11 +544,15 @@ Gaming Mode, before Steam has started, and takes the screen when Steam finishes 
 - Jellyfin: text entry with the remote, interface size by resolution, its paused film in the
   top bar, a way to sign in from the shell.
 - YouTube: check video decoding (GPU or CPU, 4K), the remote's media keys, memory use.
+- A photo's video over music playing in the background: both play now. Maybe the music
+  gets quieter for as long as the video plays.
+- The shell stays on screen while an app starts (a few seconds for YouTube): something
+  that shows the app is coming.
 - A quick double press of a direction goes all the way that way: to the end of a row, or
   down to the bottom (YouTube's recommended rows and its refresh button take long runs of
   presses today). The first press acts at once as now; only the second, if it comes
   quickly, jumps. An idea, not designed: how a jump is made in YouTube's page (keys it
   already knows, or repeating the press until the focus stops moving), how quick counts
-  as quick, whether the shell's own grids and places get it too, and that it travels
-  with YouTube's key filter when YouTube becomes a program of its own.
+  as quick, and whether the shell's own grids and places get it too. For YouTube it lives
+  in the web app (`../apps/webapp`).
 - Home, the YouTube and Netflix keys and the power dialog over a running game.

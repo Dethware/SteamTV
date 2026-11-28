@@ -63,6 +63,15 @@ IdleController::IdleController(QObject *parent)
         sendScreenSleeping();
     });
 
+    // A shell (re)started while gamescope had the screen asleep (a deploy during screen off)
+    // would otherwise leave it dark: it starts awake, so it says so once.
+    QTimer::singleShot(0, this, [this] {
+        if (m_screenSleeping)
+            return;
+        sendScreenSleeping();
+        repeatScreenWake();
+    });
+
     m_readyWindow.setSingleShot(true);
     m_readyWindow.setInterval(ReadyWindowMs);
     connect(&m_readyWindow, &QTimer::timeout, this, &IdleController::readyWindowEnded);

@@ -14,7 +14,7 @@
 // Xbox pad (Steam Input keeps the real controller). Buttons become key events for the window,
 // so QML handles the remote, a keyboard and the controller the same way.
 //
-// The virtual pad also feeds games: keep `enabled` false whenever the shell isn't on screen.
+// The virtual pad also feeds games: keep `enabled` false whenever the program isn't on screen.
 // While Steam's own UI has focus, Steam reads the controller itself and the pad stays silent.
 class GamepadInput : public QObject
 {

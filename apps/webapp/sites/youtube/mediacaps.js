@@ -8,7 +8,7 @@
 // resolution, 60 frames a second, no HDR.
 (() => {
     const MediaSourceType = window.MediaSource;
-    if (!MediaSourceType || MediaSourceType.tvshellHonest)
+    if (!MediaSourceType || MediaSourceType.webappHonest)
         return;
 
     const original = MediaSourceType.isTypeSupported.bind(MediaSourceType);
@@ -69,5 +69,5 @@
         }
         return original(kept.join("; "));
     };
-    MediaSourceType.tvshellHonest = true;
+    MediaSourceType.webappHonest = true;
 })();
